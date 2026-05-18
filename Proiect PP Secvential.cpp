@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
+#include <chrono>
 
 using namespace std;
 
@@ -10,9 +11,6 @@ using namespace std;
 const double G = 6.674e-11;
 const double SOFTENING = 1e-9;
 const double DT = 0.01;
-
-const long int STEPS = 1000;
-const long int N = 10000;
 
 // structura corpurilor
 struct Body {
@@ -93,7 +91,15 @@ void move_Bodies(vector<Body>& bodies) {
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    long int N = 10000;
+    long int STEPS = 1000;
+    long int vis_interval = 0;
+
+    if (argc > 1) N = atol(argv[1]);
+    if (argc > 2) STEPS = atol(argv[2]);
+    if (argc > 3) vis_interval = atol(argv[3]);
+
     vector<Body> bodies(N);
 
     init(bodies);
@@ -101,14 +107,24 @@ int main() {
     cout << "Sequential N-body simulation" << endl;
     cout << "Bodies: " << N << " | Steps: " << STEPS << endl;
     cout << endl;
+    cout.flush();
 
-    clock_t start = clock();
+    auto t_start = chrono::high_resolution_clock::now();
 
     for (int step = 0; step < STEPS; step++) {
         computeForces(bodies);
         move_Bodies(bodies);
 
-        if (step % 100 == 0) {
+        if (vis_interval > 0 && step % vis_interval == 0) {
+            auto t_now = chrono::high_resolution_clock::now();
+            double elapsed = chrono::duration<double>(t_now - t_start).count();
+            cout << "STEP " << step << " " << elapsed;
+            for (int i = 0; i < N; i++) {
+                cout << " " << bodies[i].x << " " << bodies[i].y << " " << bodies[i].z;
+            }
+            cout << "\n";
+            cout.flush();
+        } else if (vis_interval == 0 && step % 100 == 0) {
             cout << "Step " << step << " | body[0] position: (";
             cout << bodies[0].x << ", ";
             cout << bodies[0].y << ", ";
@@ -116,8 +132,8 @@ int main() {
         }
     }
 
-    clock_t end = clock();
-    double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
+    auto t_end = chrono::high_resolution_clock::now();
+    double elapsed = chrono::duration<double>(t_end - t_start).count();
 
     cout << endl;
     cout << "Done. Time: " << elapsed << " seconds" << endl;

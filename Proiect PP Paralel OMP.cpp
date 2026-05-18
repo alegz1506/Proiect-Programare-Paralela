@@ -11,9 +11,6 @@ const double G = 6.674e-11;
 const double SOFTENING = 1e-9;
 const double DT = 0.01;
 
-const long int STEPS = 1000;
-const long int N = 10000;
-
 // structura corpurilor
 struct Body {
     double x, y, z;
@@ -97,7 +94,15 @@ void move_Bodies(vector<Body>& bodies) {
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    long int N = 10000;
+    long int STEPS = 1000;
+    long int vis_interval = 0;
+
+    if (argc > 1) N = atol(argv[1]);
+    if (argc > 2) STEPS = atol(argv[2]);
+    if (argc > 3) vis_interval = atol(argv[3]);
+
     vector<Body> bodies(N);
 
     init(bodies);
@@ -109,14 +114,23 @@ int main() {
     cout << "Bodies: " << N << " | Steps: " << STEPS << endl;
     cout << "Threads: " << omp_get_max_threads() << endl;
     cout << endl;
+    cout.flush();
 
-    double start = omp_get_wtime();
+    double t_start = omp_get_wtime();
 
     for (int step = 0; step < STEPS; step++) {
         computeForces(bodies);
         move_Bodies(bodies);
 
-        if (step % 100 == 0) {
+        if (vis_interval > 0 && step % vis_interval == 0) {
+            double elapsed = omp_get_wtime() - t_start;
+            cout << "STEP " << step << " " << elapsed;
+            for (int i = 0; i < N; i++) {
+                cout << " " << bodies[i].x << " " << bodies[i].y << " " << bodies[i].z;
+            }
+            cout << "\n";
+            cout.flush();
+        } else if (vis_interval == 0 && step % 100 == 0) {
             cout << "Step " << step << " | body[0] position: (";
             cout << bodies[0].x << ", ";
             cout << bodies[0].y << ", ";
@@ -124,8 +138,7 @@ int main() {
         }
     }
 
-    double end = omp_get_wtime();
-    double elapsed = end - start;
+    double elapsed = omp_get_wtime() - t_start;
 
     cout << endl;
     cout << "Done. Time: " << elapsed << " seconds" << endl;
