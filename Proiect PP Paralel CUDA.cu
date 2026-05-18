@@ -2,6 +2,7 @@
 #include <vector>
 #include <cmath>
 #include <cstdlib>
+#include <chrono>
 #include <cuda_runtime.h>
 
 using namespace std;
@@ -10,9 +11,6 @@ using namespace std;
 const double G = 6.674e-11;
 const double SOFTENING = 1e-9;
 const double DT = 0.01;
-
-const long int STEPS = 1000;
-const long int N = 10000;
 
 const int THREADS_PER_BLOCK = 256;
 
@@ -98,7 +96,15 @@ __global__ void moveBodiesKernel(Body* bodies, int n) {
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    long int N = 10000;
+    long int STEPS = 1000;
+    long int vis_interval = 0;
+
+    if (argc > 1) N = atol(argv[1]);
+    if (argc > 2) STEPS = atol(argv[2]);
+    if (argc > 3) vis_interval = atol(argv[3]);
+
     vector<Body> bodies(N);
 
     init(bodies);
@@ -117,19 +123,31 @@ int main() {
     cout << "Bodies: " << N << " | Steps: " << STEPS << endl;
     cout << "Blocks: " << blocks << " | Threads per block: " << THREADS_PER_BLOCK << endl;
     cout << endl;
+    cout.flush();
 
-    cudaEvent_t start, end;
-    cudaEventCreate(&start);
-    cudaEventCreate(&end);
+    cudaEvent_t cuda_start, cuda_end;
+    cudaEventCreate(&cuda_start);
+    cudaEventCreate(&cuda_end);
 
-    cudaEventRecord(start);
+    auto wall_start = chrono::high_resolution_clock::now();
+    cudaEventRecord(cuda_start);
 
     for (int step = 0; step < STEPS; step++) {
         computeForcesKernel<<<blocks, THREADS_PER_BLOCK>>>(d_bodies, N);
-
         moveBodiesKernel<<<blocks, THREADS_PER_BLOCK>>>(d_bodies, N);
 
-        if (step % 100 == 0) {
+        if (vis_interval > 0 && step % vis_interval == 0) {
+            // sincronizam si copiem toate corpurile pentru vizualizare
+            cudaMemcpy(bodies.data(), d_bodies, N * sizeof(Body), cudaMemcpyDeviceToHost);
+            auto wall_now = chrono::high_resolution_clock::now();
+            double elapsed = chrono::duration<double>(wall_now - wall_start).count();
+            cout << "STEP " << step << " " << elapsed;
+            for (int i = 0; i < N; i++) {
+                cout << " " << bodies[i].x << " " << bodies[i].y << " " << bodies[i].z;
+            }
+            cout << "\n";
+            cout.flush();
+        } else if (vis_interval == 0 && step % 100 == 0) {
             Body body0;
 
             // copiem doar primul corp ca sa il afisam
@@ -142,11 +160,11 @@ int main() {
         }
     }
 
-    cudaEventRecord(end);
-    cudaEventSynchronize(end);
+    cudaEventRecord(cuda_end);
+    cudaEventSynchronize(cuda_end);
 
     float elapsed_ms = 0.0;
-    cudaEventElapsedTime(&elapsed_ms, start, end);
+    cudaEventElapsedTime(&elapsed_ms, cuda_start, cuda_end);
 
     // copiere date inapoi din GPU pe CPU
     cudaMemcpy(bodies.data(), d_bodies, N * sizeof(Body), cudaMemcpyDeviceToHost);
@@ -157,8 +175,8 @@ int main() {
     // eliberare memorie GPU
     cudaFree(d_bodies);
 
-    cudaEventDestroy(start);
-    cudaEventDestroy(end);
+    cudaEventDestroy(cuda_start);
+    cudaEventDestroy(cuda_end);
 
     return 0;
 }

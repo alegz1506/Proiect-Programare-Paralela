@@ -1,0 +1,4 @@
+__pycache__
+nbody
+nbody-omp
+nbody-cuda
