@@ -2,16 +2,21 @@
 #include <vector>
 #include <cmath>
 #include <cstdlib>
+#include <chrono>
+#include <algorithm>
 #include <omp.h>
 
 using namespace std;
 
-// constante
-const double G = 6.674e-11;
-const double SOFTENING = 1e-9;
-const double DT = 0.01;
+constexpr double G = 1.0;
+constexpr double TOTAL_MASS = 1.0;
+constexpr double INITIAL_RADIUS = 1.0;
+constexpr double CORE_RADIUS = 0.25;
+constexpr double SOFTENING = 0.05;
+constexpr double SOFTENING2 = SOFTENING * SOFTENING;
+constexpr double DT = 0.001;
+constexpr double DAMPING = 0.9999;
 
-// structura corpurilor
 struct Body {
     double x, y, z;
     double vx, vy, vz;
@@ -19,56 +24,93 @@ struct Body {
     double mass;
 };
 
-// initializare valori random de pozitie si viteza, cu acceleratie 0
+static inline double rand01() {
+    return static_cast<double>(rand()) / static_cast<double>(RAND_MAX);
+}
+
 void init(vector<Body>& bodies) {
     srand(42);
+    const int n = static_cast<int>(bodies.size());
+    if (n == 0) return;
 
-    for (int i = 0; i < bodies.size(); i++) {
-        bodies[i].x = (double)rand() / RAND_MAX * 2.0 - 1.0;
-        bodies[i].y = (double)rand() / RAND_MAX * 2.0 - 1.0;
-        bodies[i].z = (double)rand() / RAND_MAX * 2.0 - 1.0;
+    double mass_sum = 0.0;
 
-        bodies[i].vx = (double)rand() / RAND_MAX * 0.1;
-        bodies[i].vy = (double)rand() / RAND_MAX * 0.1;
-        bodies[i].vz = (double)rand() / RAND_MAX * 0.1;
+    for (int i = 0; i < n; ++i) {
+        const double theta = 2.0 * M_PI * rand01();
+        const double r = INITIAL_RADIUS * sqrt(rand01()) + 1e-4;
 
-        bodies[i].ax = 0.0;
-        bodies[i].ay = 0.0;
-        bodies[i].az = 0.0;
+        bodies[i].x = r * cos(theta);
+        bodies[i].y = r * sin(theta);
+        bodies[i].z = (rand01() * 2.0 - 1.0) * 0.03;
 
-        bodies[i].mass = 1e24 + (double)rand() / RAND_MAX * 1e26;
+        const double enclosed_mass = TOTAL_MASS * (r * r) / (r * r + CORE_RADIUS * CORE_RADIUS);
+        const double v_circ = sqrt(G * enclosed_mass / sqrt(r * r + SOFTENING2));
+
+        const double jitter = 0.01;
+        bodies[i].vx = -sin(theta) * v_circ + (rand01() * 2.0 - 1.0) * jitter;
+        bodies[i].vy =  cos(theta) * v_circ + (rand01() * 2.0 - 1.0) * jitter;
+        bodies[i].vz = (rand01() * 2.0 - 1.0) * jitter * 0.2;
+
+        bodies[i].ax = bodies[i].ay = bodies[i].az = 0.0;
+        bodies[i].mass = 0.75 + 0.5 * rand01();
+        mass_sum += bodies[i].mass;
+    }
+
+    for (auto& b : bodies) {
+        b.mass = b.mass / mass_sum * TOTAL_MASS;
+    }
+
+    double cmx = 0.0, cmy = 0.0, cmz = 0.0;
+    double cvx = 0.0, cvy = 0.0, cvz = 0.0;
+    double total_mass = 0.0;
+
+    for (const auto& b : bodies) {
+        total_mass += b.mass;
+        cmx += b.mass * b.x;
+        cmy += b.mass * b.y;
+        cmz += b.mass * b.z;
+        cvx += b.mass * b.vx;
+        cvy += b.mass * b.vy;
+        cvz += b.mass * b.vz;
+    }
+
+    cmx /= total_mass; cmy /= total_mass; cmz /= total_mass;
+    cvx /= total_mass; cvy /= total_mass; cvz /= total_mass;
+
+    for (auto& b : bodies) {
+        b.x -= cmx; b.y -= cmy; b.z -= cmz;
+        b.vx -= cvx; b.vy -= cvy; b.vz -= cvz;
     }
 }
 
-// calculare atractie gravitationala intre corpuri
 void computeForces(vector<Body>& bodies) {
-    int n = bodies.size();
+    const int n = static_cast<int>(bodies.size());
 
-    // fiecare thread se ocupa de un corp
     #pragma omp parallel for schedule(static)
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n; ++i) {
         double ax = 0.0;
         double ay = 0.0;
         double az = 0.0;
 
-        // calculeaza forta produsa de toate celelalte corpuri asupra lui i
-        for (int j = 0; j < n; j++) {
-            if (i != j) {
-                double dx = bodies[j].x - bodies[i].x;
-                double dy = bodies[j].y - bodies[i].y;
-                double dz = bodies[j].z - bodies[i].z;
+        const double xi = bodies[i].x;
+        const double yi = bodies[i].y;
+        const double zi = bodies[i].z;
 
-                double dist2 = dx * dx + dy * dy + dz * dz + SOFTENING;
-                double dist = sqrt(dist2);
-                double dist3 = dist2 * dist;
+        for (int j = 0; j < n; ++j) {
+            if (i == j) continue;
 
-                // calcul acceleratie gravitationala pentru corpul i
-                double forceOnI = G * bodies[j].mass / dist3;
+            const double dx = bodies[j].x - xi;
+            const double dy = bodies[j].y - yi;
+            const double dz = bodies[j].z - zi;
 
-                ax += forceOnI * dx;
-                ay += forceOnI * dy;
-                az += forceOnI * dz;
-            }
+            const double dist2 = dx * dx + dy * dy + dz * dz + SOFTENING2;
+            const double inv_dist = 1.0 / sqrt(dist2);
+            const double inv_dist3 = inv_dist * inv_dist * inv_dist;
+            const double s = G * bodies[j].mass * inv_dist3;
+
+            ax += s * dx;
+            ay += s * dy;
+            az += s * dz;
         }
 
         bodies[i].ax = ax;
@@ -77,71 +119,51 @@ void computeForces(vector<Body>& bodies) {
     }
 }
 
-// actualizare viteza si pozitie
-void move_Bodies(vector<Body>& bodies) {
-    int n = bodies.size();
+void moveBodies(vector<Body>& bodies) {
+    const int n = static_cast<int>(bodies.size());
 
-    // fiecare corp este actualizat separat, deci se poate paraleliza simplu
     #pragma omp parallel for schedule(static)
-    for (int i = 0; i < n; i++) {
-        bodies[i].vx = bodies[i].vx + bodies[i].ax * DT;
-        bodies[i].vy = bodies[i].vy + bodies[i].ay * DT;
-        bodies[i].vz = bodies[i].vz + bodies[i].az * DT;
+    for (int i = 0; i < n; ++i) {
+        bodies[i].vx = (bodies[i].vx + bodies[i].ax * DT) * DAMPING;
+        bodies[i].vy = (bodies[i].vy + bodies[i].ay * DT) * DAMPING;
+        bodies[i].vz = (bodies[i].vz + bodies[i].az * DT) * DAMPING;
 
-        bodies[i].x = bodies[i].x + bodies[i].vx * DT;
-        bodies[i].y = bodies[i].y + bodies[i].vy * DT;
-        bodies[i].z = bodies[i].z + bodies[i].vz * DT;
+        bodies[i].x += bodies[i].vx * DT;
+        bodies[i].y += bodies[i].vy * DT;
+        bodies[i].z += bodies[i].vz * DT;
     }
 }
 
 int main(int argc, char* argv[]) {
-    long int N = 10000;
-    long int STEPS = 1000;
-    long int vis_interval = 0;
+    int N = 10000;
+    int STEPS = 1000;
+    int vis_interval = 0;
 
-    if (argc > 1) N = atol(argv[1]);
-    if (argc > 2) STEPS = atol(argv[2]);
-    if (argc > 3) vis_interval = atol(argv[3]);
+    if (argc > 1) N = max(0, atoi(argv[1]));
+    if (argc > 2) STEPS = max(0, atoi(argv[2]));
+    if (argc > 3) vis_interval = max(0, atoi(argv[3]));
 
-    vector<Body> bodies(N);
-
+    vector<Body> bodies(static_cast<size_t>(N));
     init(bodies);
 
-    // setam cate thread-uri vrem sa folosim
     omp_set_num_threads(16);
+    const double t0 = omp_get_wtime();
 
-    cout << "OpenMP N-body simulation" << endl;
-    cout << "Bodies: " << N << " | Steps: " << STEPS << endl;
-    cout << "Threads: " << omp_get_max_threads() << endl;
-    cout << endl;
-    cout.flush();
-
-    double t_start = omp_get_wtime();
-
-    for (int step = 0; step < STEPS; step++) {
+    for (int step = 0; step < STEPS; ++step) {
         computeForces(bodies);
-        move_Bodies(bodies);
+        moveBodies(bodies);
 
         if (vis_interval > 0 && step % vis_interval == 0) {
-            double elapsed = omp_get_wtime() - t_start;
+            const double elapsed = omp_get_wtime() - t0;
+
             cout << "STEP " << step << " " << elapsed;
-            for (int i = 0; i < N; i++) {
+            for (int i = 0; i < N; ++i) {
                 cout << " " << bodies[i].x << " " << bodies[i].y << " " << bodies[i].z;
             }
             cout << "\n";
             cout.flush();
-        } else if (vis_interval == 0 && step % 100 == 0) {
-            cout << "Step " << step << " | body[0] position: (";
-            cout << bodies[0].x << ", ";
-            cout << bodies[0].y << ", ";
-            cout << bodies[0].z << ")" << endl;
         }
     }
-
-    double elapsed = omp_get_wtime() - t_start;
-
-    cout << endl;
-    cout << "Done. Time: " << elapsed << " seconds" << endl;
 
     return 0;
 }
